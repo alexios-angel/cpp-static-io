@@ -10,6 +10,7 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include <fstream>
+#include <bit>
 
 using namespace clang;
 
@@ -33,228 +34,75 @@ public:
 private:
     ASTContext *Context;
 
-    std::string EvaluateFilename(const Expr *fnameExpr) {
-        fnameExpr = fnameExpr->IgnoreImpCasts();
-
-        if (const StringLiteral *SL = dyn_cast<StringLiteral>(fnameExpr)) {
-            return SL->getString().str();
+    std::basic_string<uint8_t> GetString(const Expr *string_expr) {
+        // Handle string literals
+        if (const StringLiteral *SL = dyn_cast<StringLiteral>(string_expr)) {
+            llvm::StringRef Str = SL->getString();
+            llvm::errs() << "Evaluated string literal: " << Str << "\n";
+            // Convert the string to std::basic_string<uint8_t>
+            return std::basic_string<uint8_t>(Str.bytes_begin(), Str.bytes_end());
         }
 
-        if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(fnameExpr)) {
-            if (const VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-                const Expr *InitExpr = VD->getInit();
-                if (const StringLiteral *SL = dyn_cast<StringLiteral>(InitExpr)) {
-                    return SL->getString().str();
-                }
-            }
-        }
+        // Initialize the result string with the array size
+        std::basic_string<uint8_t> Result;
 
-        llvm::errs() << "Filename expression could not be resolved.\n";
-        return "";
-    }
-
-std::vector<uint8_t> EvaluateData(const Expr *dataExpr) {
-    std::vector<uint8_t> byteArray;
-    dataExpr = dataExpr->IgnoreImpCasts();
-
-    llvm::errs() << "Evaluating data expression of type: " << dataExpr->getStmtClassName() << "\n";
-
-    if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(dataExpr)) {
-        if (const ValueDecl *VD = DRE->getDecl()) {
-            return EvaluateValueDecl(VD);
-        }
-    }
-
-    // If not a DeclRefExpr, proceed with general constant expression evaluation
-    Expr::EvalResult Result;
-    if (dataExpr->EvaluateAsConstantExpr(Result, *Context)) {
-        byteArray = EvaluateConstantExpr(Result);
-    } else {
-        llvm::errs() << "Data expression could not be evaluated as a constant expression.\n";
-    }
-
-    llvm::errs() << "Evaluated byte array size: " << byteArray.size() << "\n";
-    return byteArray;
-}
-
-std::vector<uint8_t> EvaluateValueDecl(const ValueDecl *VD) {
-    llvm::errs() << "Evaluating ValueDecl: " << VD->getNameAsString() << "\n";
-
-    if (const VarDecl *Var = dyn_cast<VarDecl>(VD)) {
-        llvm::errs() << "VarDecl kind: " << Var->getKind() << "\n";
-        llvm::errs() << "Is constexpr: " << Var->isConstexpr() << "\n";
-        llvm::errs() << "Is static data member: " << Var->isStaticDataMember() << "\n";
-
-        // Handle static data member of a template specialization
-        if (Var->isStaticDataMember()) {
-            return EvaluateStaticMember(Var);
-        }
-
-        if (Var->hasInit()) {
-            llvm::errs() << "VarDecl has initializer\n";
-            const Expr *InitExpr = Var->getInit();
-            Expr::EvalResult Result;
-            if (InitExpr->EvaluateAsConstantExpr(Result, *Context)) {
-                return EvaluateConstantExpr(Result);
-            } else {
-                llvm::errs() << "Failed to evaluate initializer as constant expression\n";
-            }
-        } else {
-            llvm::errs() << "VarDecl has no initializer\n";
-        }
-
-        // Try to evaluate the value
-        if (const APValue *Value = Var->evaluateValue()) {
-            llvm::errs() << "Successfully evaluated VarDecl value\n";
-            Expr::EvalResult Result;
-            Result.Val = *Value;
-            return EvaluateConstantExpr(Result);
-        } else {
-            llvm::errs() << "Failed to evaluate VarDecl value\n";
-        }
-    } else {
-        llvm::errs() << "ValueDecl is not a VarDecl\n";
-    }
-
-    llvm::errs() << "Failed to evaluate ValueDecl.\n";
-    return {};
-}
-
-std::vector<uint8_t> EvaluateStaticMember(const VarDecl *Var) {
-    const DeclContext *DC = Var->getDeclContext();
-    while (DC) {
-        if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(DC)) {
-            if (const ClassTemplateSpecializationDecl *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD)) {
-                llvm::errs() << "Found template specialization: " << CTSD->getNameAsString() << "\n";
-                return EvaluateTemplateSpecialization(CTSD, Var);
-            }
-        }
-        DC = DC->getParent();
-    }
-    llvm::errs() << "Failed to find template specialization\n";
-    return {};
-}
-
-std::vector<uint8_t> EvaluateTemplateSpecialization(const ClassTemplateSpecializationDecl *CTSD, const VarDecl *Var) {
-    llvm::errs() << "Evaluating template specialization: " << CTSD->getNameAsString() << "\n";
-    llvm::errs() << "Static member name: " << Var->getNameAsString() << "\n";
-
-    std::vector<uint8_t> byteArray;
-
-    // Try to evaluate the static member directly
-    llvm::errs() << "Attempting to evaluate static member directly...\n";
-    Expr::EvalResult Result;
-    if (Var->hasInit() && Var->getInit()->EvaluateAsConstantExpr(Result, *Context)) {
-        llvm::errs() << "Successfully evaluated static member initialization\n";
-        return EvaluateConstantExpr(Result);
-    }
-
-    llvm::errs() << "Direct evaluation of static member failed, falling back to template arguments\n";
-
-    // If direct evaluation fails, try to use the template arguments
-    const TemplateArgumentList &Args = CTSD->getTemplateArgs();
-    llvm::errs() << "Template has " << Args.size() << " arguments\n";
-
-    for (unsigned i = 0; i < Args.size(); ++i) {
-        const TemplateArgument &Arg = Args[i];
-        llvm::errs() << "Processing template argument " << i << ", kind: " << Arg.getKind() << "\n";
-
-        if (Arg.getKind() == TemplateArgument::Integral) {
-            llvm::APSInt Value = Arg.getAsIntegral();
-            std::string Str;
-            llvm::raw_string_ostream OS(Str);
-            Value.print(OS, Value.isSigned());
-            OS.flush();
-            llvm::errs() << "Evaluated template argument " << i << " to: " << Str << "\n";
-            byteArray.insert(byteArray.end(), Str.begin(), Str.end());
-        } else {
-            llvm::errs() << "Template argument " << i << " is not an integral\n";
-        }
-    }
-
-    if (byteArray.empty()) {
-        llvm::errs() << "Failed to evaluate template specialization\n";
-    } else {
-        llvm::errs() << "Successfully evaluated template specialization\n";
-    }
-    return byteArray;
-}
-
-std::vector<uint8_t> EvaluateConstantExpr(const Expr::EvalResult &Result) {
-    std::vector<uint8_t> byteArray;
-    if (Result.Val.isInt()) {
-        llvm::APSInt Value = Result.Val.getInt();
-        std::string Str;
-        llvm::raw_string_ostream OS(Str);
-        Value.print(OS, Value.isSigned());
-        OS.flush();
-        byteArray.assign(Str.begin(), Str.end());
-        llvm::errs() << "Evaluated integer value: " << Str << "\n";
-    } else if (Result.Val.isFloat()) {
-        llvm::APFloat Value = Result.Val.getFloat();
-        llvm::SmallString<32> Str;
-        Value.toString(Str);
-        byteArray.assign(Str.begin(), Str.end());
-        llvm::errs() << "Evaluated float value: " << Str << "\n";
-    } else if (Result.Val.isLValue()) {
-        if (Result.Val.getLValueBase()) {
-            if (const Expr *E = Result.Val.getLValueBase().dyn_cast<const Expr*>()) {
-                if (const StringLiteral *SL = dyn_cast<StringLiteral>(E)) {
-                    llvm::StringRef Str = SL->getString();
-                    byteArray.assign(Str.begin(), Str.end());
-                    llvm::errs() << "Evaluated string literal: " << Str << "\n";
-                } else if (const ArrayType *AT = E->getType()->getAsArrayTypeUnsafe()) {
-                    const ConstantArrayType *CAT = dyn_cast<ConstantArrayType>(AT);
-                    if (CAT) {
-                        uint64_t ArraySize = CAT->getSize().getZExtValue();
-                        llvm::errs() << "Found array with size: " << ArraySize << "\n";
-                        
-                        // Try to evaluate the array expression
-                        Expr::EvalResult ArrayResult;
-                        if (E->EvaluateAsConstantExpr(ArrayResult, *Context)) {
-                            if (ArrayResult.Val.isArray()) {
-                                for (uint64_t i = 0; i < ArraySize; ++i) {
-                                    const APValue &Element = ArrayResult.Val.getArrayInitializedElt(i);
-                                    if (Element.isInt()) {
-                                        byteArray.push_back(static_cast<uint8_t>(Element.getInt().getLimitedValue()));
-                                    }
-                                }
-                                llvm::errs() << "Evaluated array with " << ArraySize << " elements\n";
-                            } else {
-                                llvm::errs() << "Array evaluation did not result in an array value\n";
-                            }
-                        } else {
-                            llvm::errs() << "Failed to evaluate array expression\n";
-                        }
+        if (const auto *Init = dyn_cast<InitListExpr>(string_expr)) {
+            for (unsigned i = 0; i < Init->getNumInits(); ++i) {
+                if (const Expr * I = Init->getInit(i)) {
+                    const Expr * E = I->IgnoreImpCasts();
+                    if (const auto *IntLit = dyn_cast<IntegerLiteral>(E)) {
+                        llvm::APInt Value = IntLit->getValue();
+                        uint64_t num = Value.getZExtValue();
+                        // This is where errors could occur!!
+                        // This is where uint64_t is narrowed to uint8_t
+                        Result.push_back(static_cast<uint8_t>(num));
+                    } else if (const auto *CharLit = dyn_cast<CharacterLiteral>(I)) {
+                        Result.push_back(static_cast<uint8_t>(CharLit->getValue()));
                     } else {
-                        llvm::errs() << "Array is not a constant array type\n";
+                        llvm::errs() << "Unsupported array element type " << E->getStmtClassName();
+                    }
+                } else {return {};}
+            }
+        }
+
+        return Result;
+    }
+
+    std::basic_string<uint8_t> EvaluateString(const Expr *string_expr){
+        string_expr = string_expr->IgnoreImpCasts();
+
+        if (const StringLiteral *SL = dyn_cast<StringLiteral>(string_expr)) {
+            llvm::errs() << SL->getString().str() << '\n';
+        }
+
+        Expr::EvalResult Result;
+        if (string_expr->EvaluateAsConstantExpr(Result, *Context)) {
+            if (Result.Val.isLValue()) {
+                if (const clang::APValue::LValueBase base = Result.Val.getLValueBase()) {
+                    if(const ValueDecl *D = base.dyn_cast<const ValueDecl*>()){
+                        if (const clang::VarDecl *VD = llvm::dyn_cast<clang::VarDecl>(D)) {
+                            if (const clang::Expr *Init = VD->getInit()) {
+                                return GetString(Init);
+                            }
+                        }
+                    } else if (const Expr *E = base.dyn_cast<const Expr*>()) {
+                        return GetString(E);
+                    } else {
+                        llvm::errs() << "Unknown LValueBase type\n";
+                        return {};
                     }
                 } else {
-                    llvm::errs() << "LValue is neither a string literal nor an array\n";
+                    llvm::errs() << "LValue has no base\n";
+                    return {};
                 }
-            } else {
-                llvm::errs() << "LValue base is not an Expr\n";
-            }
+            } 
         } else {
-            llvm::errs() << "LValue has no base\n";
+            llvm::errs() << "Failed to evaluate as constant expression\n";
+            return {};
         }
-        if (byteArray.empty()) {
-            llvm::errs() << "LValue could not be evaluated to a byte array.\n";
-        }
-    } else if (Result.Val.isArray()) {
-        unsigned NumElements = Result.Val.getArrayInitializedElts();
-        for (unsigned i = 0; i < NumElements; ++i) {
-            const APValue &Element = Result.Val.getArrayInitializedElt(i);
-            if (Element.isInt()) {
-                byteArray.push_back(static_cast<uint8_t>(Element.getInt().getLimitedValue()));
-            }
-        }
-        llvm::errs() << "Evaluated array with " << NumElements << " elements\n";
-    } else {
-        llvm::errs() << "Unsupported constant expression type\n";
+
+        return {};
     }
-    return byteArray;
-}
 
     void EvaluateStaticWrite(CallExpr *CE) {
         const Expr *fnameExpr = CE->getArg(0);
@@ -262,14 +110,14 @@ std::vector<uint8_t> EvaluateConstantExpr(const Expr::EvalResult &Result) {
 
         llvm::errs() << "Evaluating static_write call\n";
 
-        std::string fname = EvaluateFilename(fnameExpr);
+        auto fname = EvaluateString(fnameExpr);
         if (fname.empty()) {
             llvm::errs() << "Filename is not valid or could not be resolved.\n";
-            return;
         }
-        llvm::errs() << "Filename evaluated: " << fname << "\n";
+        const char * fname_c_str = reinterpret_cast<const char *>(fname.data());
+        llvm::errs() << "Filename evaluated: " << fname_c_str << "\n";
 
-        std::vector<uint8_t> byteArray = EvaluateData(dataExpr);
+        auto byteArray = EvaluateString(dataExpr);
 
         llvm::errs() << "Byte array: {";
         for (const auto &c : byteArray) {
@@ -277,14 +125,16 @@ std::vector<uint8_t> EvaluateConstantExpr(const Expr::EvalResult &Result) {
         }
         llvm::errs() << "}\n";
 
+        return;
+
         if (!byteArray.empty()) {
-            std::ofstream outFile(fname, std::ios::binary | std::ios::app);
+            std::ofstream outFile(fname_c_str, std::ios::binary | std::ios::app);
             if (outFile.is_open()) {
                 outFile.write(reinterpret_cast<const char *>(byteArray.data()), byteArray.size());
                 outFile.close();
-                llvm::errs() << "Data written to file: " << fname << "\n";
+                llvm::errs() << "Data written to file: " << fname_c_str << "\n";
             } else {
-                llvm::errs() << "Could not open file " << fname << " for writing.\n";
+                llvm::errs() << "Could not open file " << fname_c_str << " for writing.\n";
             }
         } else {
             llvm::errs() << "No data to write.\n";
