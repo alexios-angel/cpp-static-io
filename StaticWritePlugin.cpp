@@ -47,34 +47,36 @@ private:
         std::basic_string<uint8_t> Result;
 
         if (const auto *Init = dyn_cast<InitListExpr>(string_expr)) {
+            Result.reserve(Init->getNumInits());
             for (unsigned i = 0; i < Init->getNumInits(); ++i) {
                 if (const Expr * I = Init->getInit(i)) {
                     const Expr * E = I->IgnoreImpCasts();
                     if (const auto *IntLit = dyn_cast<IntegerLiteral>(E)) {
                         llvm::APInt Value = IntLit->getValue();
-                        uint64_t num = Value.getZExtValue();
+                        const uint64_t num = Value.getZExtValue();
                         // This is where errors could occur!!
                         // This is where uint64_t is narrowed to uint8_t
                         Result.push_back(static_cast<uint8_t>(num));
-                    } else if (const auto *CharLit = dyn_cast<CharacterLiteral>(I)) {
+                    } else if (const auto *CharLit = dyn_cast<CharacterLiteral>(E)) {
                         Result.push_back(static_cast<uint8_t>(CharLit->getValue()));
                     } else {
                         llvm::errs() << "Unsupported array element type " << E->getStmtClassName();
+                        return {};
                     }
-                } else {return {};}
+                } else {
+                    llvm::errs() << "This shouldn't trigger a bug but handling anyway\n";
+                    return {};
+                }
             }
+        } else {
+            llvm::errs() << "Unknown string expression type " << string_expr->getStmtClassName();
         }
-
         return Result;
     }
 
     std::basic_string<uint8_t> EvaluateString(const Expr *string_expr){
         string_expr = string_expr->IgnoreImpCasts();
-
-        if (const StringLiteral *SL = dyn_cast<StringLiteral>(string_expr)) {
-            llvm::errs() << SL->getString().str() << '\n';
-        }
-
+        
         Expr::EvalResult Result;
         if (string_expr->EvaluateAsConstantExpr(Result, *Context)) {
             if (Result.Val.isLValue()) {
@@ -107,8 +109,6 @@ private:
     void EvaluateStaticWrite(CallExpr *CE) {
         const Expr *fnameExpr = CE->getArg(0);
         const Expr *dataExpr = CE->getArg(1);
-
-        llvm::errs() << "Evaluating static_write call\n";
 
         auto fname = EvaluateString(fnameExpr);
         if (fname.empty()) {
