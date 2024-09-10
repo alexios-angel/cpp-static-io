@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(StaticWritePlugin)
+project(StaticIOPlugin)
 
 # Find the LLVM and Clang packages
 find_package(LLVM REQUIRED CONFIG)
@@ -12,20 +12,20 @@ add_definitions(${LLVM_DEFINITIONS})
 
 # Specify the source files
 set(SOURCES
-    StaticWritePlugin.cpp
+    StaticIOPlugin.cpp
 )
 
 # Create the shared library for the Clang plugin
-add_library(StaticWritePlugin SHARED ${SOURCES})
+add_library(StaticIOPlugin SHARED ${SOURCES})
 
 # Set the properties for the plugin
-set_target_properties(StaticWritePlugin PROPERTIES
+set_target_properties(StaticIOPlugin PROPERTIES
   COMPILE_FLAGS "${LLVM_CXXFLAGS}"
   LINK_FLAGS "${LLVM_LDFLAGS}"
 )
 
 # Link the Clang libraries
-target_link_libraries(StaticWritePlugin
+target_link_libraries(StaticIOPlugin
     clangTooling
     clangBasic
     clangASTMatchers
