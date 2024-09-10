@@ -23,9 +23,7 @@ public:
     bool VisitCallExpr(CallExpr *CE) {
         if (FunctionDecl *FD = CE->getDirectCallee()) {
             if (FD->getNameInfo().getName().getAsString() == "static_write") {
-                if (CE->getNumArgs() == 2) {
-                    EvaluateStaticWrite(CE);
-                }
+                EvaluateStaticWrite(CE);
             }
         }
         return true;
@@ -64,7 +62,15 @@ private:
                     } else if(const auto *ListExpr = dyn_cast<InitListExpr>(E)) {
                         return GetString(E);
                     } else {
-                        llvm::errs() << "Unsupported array element type " << E->getStmtClassName();
+                        // Get the diagnostics engine from the ASTContext.
+                        DiagnosticsEngine &DE = Context->getDiagnostics();
+
+                        // Emit an error.
+                        unsigned DiagID = DE.getCustomDiagID(DiagnosticsEngine::Error,
+                            "Unknown statement type in InitListExpr. Statement type is %0");
+
+                        // Report the error.
+                        DE.Report(E->getExprLoc(), DiagID) << E->getStmtClassName();
                         return {};
                     }
                 } else {
@@ -73,9 +79,29 @@ private:
                 }
             }
         } else {
-            llvm::errs() << "Unknown string expression type " << string_expr->getStmtClassName();
+            // Get the diagnostics engine from the ASTContext.
+            DiagnosticsEngine &DE = Context->getDiagnostics();
+
+            // Emit an error.
+            unsigned DiagID = DE.getCustomDiagID(DiagnosticsEngine::Error,
+                "Unknown string expression type %0");
+
+            // Report the error and pass the type of stmt to the engine.
+            DE.Report(string_expr->getExprLoc(), DiagID) << string_expr->getStmtClassName();
         }
         return Result;
+    }
+
+    template<size_t N>
+    void EmitError(const Expr *expression, const char (&msg)[N]){
+            // Get the diagnostics engine from the ASTContext.
+            DiagnosticsEngine &DE = Context->getDiagnostics();
+
+            // Emit an error.
+            unsigned DiagID = DE.getCustomDiagID(DiagnosticsEngine::Error, msg);
+
+            // Report the error.
+            DE.Report(expression->getExprLoc(), DiagID);
     }
 
     std::basic_string<uint8_t> EvaluateString(const Expr *string_expr){
@@ -94,16 +120,18 @@ private:
                     } else if (const Expr *E = base.dyn_cast<const Expr*>()) {
                         return GetString(E);
                     } else {
-                        llvm::errs() << "Unknown LValueBase type\n";
+                        EmitError(string_expr, "Unknown LValueBase type in static io expression");
                         return {};
                     }
                 } else {
-                    llvm::errs() << "LValue has no base\n";
+                    EmitError(string_expr, "LValue has no base in static io expression");
                     return {};
                 }
+            } else {
+                EmitError(string_expr, "Parameter in static io expression is not an LValue");
             } 
         } else {
-            llvm::errs() << "Failed to evaluate as constant expression\n";
+            EmitError(string_expr, "Failed to evaluate static io as a constant expression");
             return {};
         }
 
@@ -116,33 +144,37 @@ private:
 
         auto fname = EvaluateString(fnameExpr);
         if (fname.empty()) {
-            llvm::errs() << "Filename is not valid or could not be resolved.\n";
+            EmitError(fnameExpr, "Filename in static io expression is not valid or could not be resolved");
             return;
         }
         const char * fname_c_str = reinterpret_cast<const char *>(fname.data());
-        llvm::errs() << "Filename evaluated: " << fname_c_str << "\n";
+        //llvm::errs() << "Filename evaluated: " << fname_c_str << "\n";
 
         auto byteArray = EvaluateString(dataExpr);
 
-        llvm::errs() << "Byte array: {";
+        /*llvm::errs() << "Byte array: {";
         for (const auto &c : byteArray) {
             llvm::errs() << (int)c << ",";
         }
-        llvm::errs() << "}\n";
-
-        return;
+        llvm::errs() << "}\n";*/
 
         if (!byteArray.empty()) {
             std::ofstream outFile(fname_c_str, std::ios::binary | std::ios::app);
             if (outFile.is_open()) {
-                outFile.write(reinterpret_cast<const char *>(byteArray.data()), byteArray.size());
+                outFile.write(reinterpret_cast<char *>(byteArray.data()), byteArray.size());
                 outFile.close();
-                llvm::errs() << "Data written to file: " << fname_c_str << "\n";
+                //llvm::errs() << "Data written to file: " << fname_c_str << "\n";
             } else {
-                llvm::errs() << "Could not open file " << fname_c_str << " for writing.\n";
+                // Get the diagnostics engine from the ASTContext.
+                DiagnosticsEngine &DE = Context->getDiagnostics();
+
+                // Emit an error.
+                unsigned DiagID = DE.getCustomDiagID(DiagnosticsEngine::Error, "Could not open file '%0' in static io expression");
+
+                // Report the error.
+                DE.Report(dataExpr->getExprLoc(), DiagID) << fname_c_str;
+                //llvm::errs() << "Could not open file " << fname_c_str << " for writing.\n";
             }
-        } else {
-            llvm::errs() << "No data to write.\n";
         }
     }
 };
