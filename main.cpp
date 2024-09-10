@@ -23,6 +23,7 @@ int main() {
     static_write("/dev/stdout", arr<data>()); // This will write the byte array to "output.bin"
     static_write("/dev/stdout", data);
     static_write("/dev/stdout", "this is a test\n"); // This will write the byte array to "output.bin"
+    static_write("/dev/stdout", std_arr_data.data());
     static_write("/dev/stdout", arr2<data>());
     return 0;
 }

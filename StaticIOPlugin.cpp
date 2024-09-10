@@ -38,7 +38,6 @@ private:
         // Handle string literals
         if (const StringLiteral *SL = dyn_cast<StringLiteral>(string_expr)) {
             llvm::StringRef Str = SL->getString();
-            llvm::errs() << "Evaluated string literal: " << Str << "\n";
             // Convert the string to std::basic_string<uint8_t>
             return std::basic_string<uint8_t>(Str.bytes_begin(), Str.bytes_end());
         }
@@ -59,6 +58,8 @@ private:
                         Result.push_back(static_cast<uint8_t>(num));
                     } else if (const auto *CharLit = dyn_cast<CharacterLiteral>(E)) {
                         Result.push_back(static_cast<uint8_t>(CharLit->getValue()));
+                    } else if(const auto *ListExpr = dyn_cast<InitListExpr>(E)) {
+                        return GetString(E);
                     } else {
                         llvm::errs() << "Unsupported array element type " << E->getStmtClassName();
                         return {};
@@ -113,6 +114,7 @@ private:
         auto fname = EvaluateString(fnameExpr);
         if (fname.empty()) {
             llvm::errs() << "Filename is not valid or could not be resolved.\n";
+            return;
         }
         const char * fname_c_str = reinterpret_cast<const char *>(fname.data());
         llvm::errs() << "Filename evaluated: " << fname_c_str << "\n";
@@ -174,4 +176,4 @@ protected:
 
 // Register the plugin with Clang
 static FrontendPluginRegistry::Add<StaticWriteAction>
-    X("static-write", "Evaluates constexpr byte array in static_write and writes to a file at compile time");
+    X("staticio", "Evaluates constexpr byte array and writes/reads a file at compile time");
