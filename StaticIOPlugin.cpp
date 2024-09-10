@@ -58,6 +58,9 @@ private:
                         Result.push_back(static_cast<uint8_t>(num));
                     } else if (const auto *CharLit = dyn_cast<CharacterLiteral>(E)) {
                         Result.push_back(static_cast<uint8_t>(CharLit->getValue()));
+                    // If it is a std::array then it would be a InitListExprByte;
+                    // Check if it is apart of InitListExpr and if so recurse down
+                    // into GetString
                     } else if(const auto *ListExpr = dyn_cast<InitListExpr>(E)) {
                         return GetString(E);
                     } else {
